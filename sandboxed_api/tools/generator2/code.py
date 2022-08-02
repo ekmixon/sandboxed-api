@@ -41,9 +41,8 @@ def _init_libclang():
   # that are used on Debian (and others). If LD_LIBRARY_PATH is set, it is
   # used as well.
   for version in ['', '12', '11', '10', '9', '8', '7', '6.0', '5.0', '4.0']:
-    libname = 'clang' + ('-' + version if version else '')
-    libclang = util.find_library(libname)
-    if libclang:
+    libname = 'clang' + (f'-{version}' if version else '')
+    if libclang := util.find_library(libname):
       cindex.Config.set_library_file(libclang)
       break
 
@@ -54,13 +53,13 @@ def get_header_guard(path):
   # the output file will be most likely somewhere in genfiles, strip the
   # prefix in that case, also strip .gen if this is a step before clang-format
   if not path:
-    raise ValueError('Cannot prepare header guard from path: {}'.format(path))
+    raise ValueError(f'Cannot prepare header guard from path: {path}')
   if 'genfiles/' in path:
     path = path.split('genfiles/')[1]
   if path.endswith('.gen'):
     path = path.split('.gen')[0]
   path = path.upper().replace('.', '_').replace('-', '_').replace('/', '_')
-  return path + '_'
+  return f'{path}_'
 
 
 def _stringify_tokens(tokens, separator='\n'):
@@ -183,10 +182,12 @@ class Type(object):
 
   # Hack: both class and struct types are indistinguishable except for
   # declaration cursor kind
-  def is_elaborated(self):  # class, struct, union
+  def is_elaborated(self):# class, struct, union
     # type: () -> bool
-    return (self._clang_type.kind == cindex.TypeKind.ELABORATED or
-            self._clang_type.kind == cindex.TypeKind.RECORD)
+    return self._clang_type.kind in [
+        cindex.TypeKind.ELABORATED,
+        cindex.TypeKind.RECORD,
+    ]
 
   def is_struct(self):
     # type: () -> bool
@@ -370,8 +371,8 @@ class OutputLine(object):
 
   def __str__(self):
     # type: () -> Text
-    tabs = ('\t' * self.tab) if not self.define else ''
-    return tabs + ''.join(t for t in self.spellings)
+    tabs = '' if self.define else '\t' * self.tab
+    return tabs + ''.join(self.spellings)
 
 
 class ArgumentType(Type):
@@ -392,7 +393,7 @@ class ArgumentType(Type):
     self._function = function
 
     self.pos = pos
-    self.name = name or 'a{}'.format(pos)
+    self.name = name or f'a{pos}'
     self.type = arg_type.spelling
 
     template = '{}' if self.is_ptr() else '&{}_'
@@ -402,9 +403,9 @@ class ArgumentType(Type):
     # type: () -> Text
     """Returns function argument prepared from the type."""
     if self.is_ptr():
-      return '::sapi::v::Ptr* {}'.format(self.name)
+      return f'::sapi::v::Ptr* {self.name}'
 
-    return '{} {}'.format(self._clang_type.spelling, self.name)
+    return f'{self._clang_type.spelling} {self.name}'
 
   @property
   def wrapped(self):
@@ -418,7 +419,7 @@ class ArgumentType(Type):
     if self.is_ptr():
       # TODO(szwl): const ptrs do not play well with SAPI C++ API...
       spelling = self._clang_type.spelling.replace('const', '')
-      return '::sapi::v::Reg<{}>'.format(spelling)
+      return f'::sapi::v::Reg<{spelling}>'
 
     type_ = self._clang_type
 
@@ -427,11 +428,11 @@ class ArgumentType(Type):
     if type_.kind == cindex.TypeKind.ELABORATED:
       type_ = type_.get_canonical()
     if type_.kind == cindex.TypeKind.ENUM:
-      return '::sapi::v::IntBase<{}>'.format(self._clang_type.spelling)
+      return f'::sapi::v::IntBase<{self._clang_type.spelling}>'
     if type_.kind in [
         cindex.TypeKind.CONSTANTARRAY, cindex.TypeKind.INCOMPLETEARRAY
     ]:
-      return '::sapi::v::Reg<{}>'.format(self._clang_type.spelling)
+      return f'::sapi::v::Reg<{self._clang_type.spelling}>'
 
     if type_.kind == cindex.TypeKind.LVALUEREFERENCE:
       return 'LVALUEREFERENCE::NOT_SUPPORTED'
@@ -440,18 +441,14 @@ class ArgumentType(Type):
       return 'RVALUEREFERENCE::NOT_SUPPORTED'
 
     if type_.kind in [cindex.TypeKind.RECORD, cindex.TypeKind.ELABORATED]:
-      raise ValueError('Elaborate type (eg. struct) in mapped_type is not '
-                       'supported: function {}, arg {}, type {}, location {}'
-                       ''.format(self._function.name, self.pos,
-                                 self._clang_type.spelling,
-                                 self._function.cursor.location))
+      raise ValueError(
+          f'Elaborate type (eg. struct) in mapped_type is not supported: function {self._function.name}, arg {self.pos}, type {self._clang_type.spelling}, location {self._function.cursor.location}'
+      )
 
     if type_.kind not in TYPE_MAPPING:
-      raise KeyError('Key {} does not exist in TYPE_MAPPING.'
-                     ' function {}, arg {}, type {}, location {}'
-                     ''.format(type_.kind, self._function.name, self.pos,
-                               self._clang_type.spelling,
-                               self._function.cursor.location))
+      raise KeyError(
+          f'Key {type_.kind} does not exist in TYPE_MAPPING. function {self._function.name}, arg {self.pos}, type {self._clang_type.spelling}, location {self._function.cursor.location}'
+      )
 
     return TYPE_MAPPING[type_.kind]
 
@@ -473,7 +470,7 @@ class ReturnType(ArgumentType):
     """Returns function return type prepared from the type."""
     # TODO(szwl): const ptrs do not play well with SAPI C++ API...
     spelling = self._clang_type.spelling.replace('const', '')
-    return_type = 'absl::StatusOr<{}>'.format(spelling)
+    return_type = f'absl::StatusOr<{spelling}>'
     return_type = 'absl::Status' if self.is_void() else return_type
     return return_type
 
@@ -491,8 +488,8 @@ class Function(object):
     self.cursor = cursor  # type: cindex.Index
     self.name = cursor.spelling  # type: Text
     self.result = ReturnType(self, cursor.result_type)
-    self.original_definition = '{} {}'.format(
-        cursor.result_type.spelling, self.cursor.displayname)  # type: Text
+    self.original_definition = (
+        f'{cursor.result_type.spelling} {self.cursor.displayname}')
 
     types = self.cursor.get_arguments()
     self.argument_types = [
@@ -559,9 +556,9 @@ class _TranslationUnit(object):
     self.limit_scan_depth = limit_scan_depth
     self._tu = tu
     self._processed = False
-    self.forward_decls = dict()
+    self.forward_decls = {}
     self.functions = set()
-    self.order = dict()
+    self.order = {}
     self.defines = {}
     self.required_defines = set()
     self.types_to_skip = set()
@@ -569,39 +566,40 @@ class _TranslationUnit(object):
   def _process(self):
     # type: () -> None
     """Walks the cursor tree and caches some for future use."""
-    if not self._processed:
-      # self.includes[self._tu.spelling] = (0, self._tu.cursor)
-      self._processed = True
-      # TODO(szwl): duplicates?
-      # TODO(szwl): for d in translation_unit.diagnostics:, handle that
+    if self._processed:
+      return
+    # self.includes[self._tu.spelling] = (0, self._tu.cursor)
+    self._processed = True
+    # TODO(szwl): duplicates?
+    # TODO(szwl): for d in translation_unit.diagnostics:, handle that
 
-      for i, cursor in enumerate(self._walk_preorder()):
-        # Workaround for issue#32
-        # ignore all the cursors with kinds not implemented in python bindings
-        try:
-          cursor.kind
-        except ValueError:
-          continue
-        # naive way to order types: they should be ordered when walking the tree
-        if cursor.kind.is_declaration():
-          self.order[cursor.hash] = i
+    for i, cursor in enumerate(self._walk_preorder()):
+      # Workaround for issue#32
+      # ignore all the cursors with kinds not implemented in python bindings
+      try:
+        cursor.kind
+      except ValueError:
+        continue
+      # naive way to order types: they should be ordered when walking the tree
+      if cursor.kind.is_declaration():
+        self.order[cursor.hash] = i
 
-        if (cursor.kind == cindex.CursorKind.MACRO_DEFINITION and
-            cursor.location.file):
-          self.order[cursor.hash] = i
-          self.defines[cursor.spelling] = cursor
+      if (cursor.kind == cindex.CursorKind.MACRO_DEFINITION and
+          cursor.location.file):
+        self.order[cursor.hash] = i
+        self.defines[cursor.spelling] = cursor
 
-        # most likely a forward decl of struct
-        if (cursor.kind == cindex.CursorKind.STRUCT_DECL and
-            not cursor.is_definition()):
-          self.forward_decls[Type(self, cursor.type)] = cursor
-        if (cursor.kind == cindex.CursorKind.FUNCTION_DECL and
-            cursor.linkage != cindex.LinkageKind.INTERNAL):
-          if self.limit_scan_depth:
-            if (cursor.location and cursor.location.file.name == self.path):
-              self.functions.add(Function(self, cursor))
-          else:
+      # most likely a forward decl of struct
+      if (cursor.kind == cindex.CursorKind.STRUCT_DECL and
+          not cursor.is_definition()):
+        self.forward_decls[Type(self, cursor.type)] = cursor
+      if (cursor.kind == cindex.CursorKind.FUNCTION_DECL and
+          cursor.linkage != cindex.LinkageKind.INTERNAL):
+        if self.limit_scan_depth:
+          if (cursor.location and cursor.location.file.name == self.path):
             self.functions.add(Function(self, cursor))
+        else:
+          self.functions.add(Function(self, cursor))
 
   def get_functions(self):
     # type: () -> Set[Function]
@@ -611,13 +609,12 @@ class _TranslationUnit(object):
 
   def _walk_preorder(self):
     # type: () -> Gen
-    for c in self._tu.cursor.walk_preorder():
-      yield c
+    yield from self._tu.cursor.walk_preorder()
 
   def search_for_macro_name(self, cursor):
     # type: (cindex.Cursor) -> None
     """Searches for possible macro usage in constant array types."""
-    tokens = list(t.spelling for t in cursor.get_tokens())
+    tokens = [t.spelling for t in cursor.get_tokens()]
     try:
       for token in tokens:
         if token in self.defines and token not in self.required_defines:
@@ -654,14 +651,14 @@ class Analyzer(object):
     """Returns Analysis object for given path."""
     compile_flags = compile_flags or []
     if test_file_existence and not os.path.isfile(path):
-      raise IOError('Path {} does not exist.'.format(path))
+      raise IOError(f'Path {path} does not exist.')
 
     _init_libclang()
     index = cindex.Index.create()  # type: cindex.Index
     # TODO(szwl): hack until I figure out how python swig does that.
     # Headers will be parsed as C++. C libs usually have
     # '#ifdef __cplusplus extern "C"' for compatibility with c++
-    lang = '-xc++' if not path.endswith('.c') else '-xc'
+    lang = '-xc' if path.endswith('.c') else '-xc++'
     args = [lang]
     args += compile_flags
     args.append('-I.')
@@ -729,7 +726,7 @@ class Generator(object):
     related_types = self._get_related_types(function_names)
     forward_decls = self._get_forward_decls(related_types)
     functions = self._get_functions(function_names)
-    related_types = [(t.stringify() + ';') for t in related_types]
+    related_types = [f'{t.stringify()};' for t in related_types]
     defines = self._get_defines()
 
     api = {
@@ -820,15 +817,15 @@ class Generator(object):
   def _get_forward_decls(self, types):
     # type: (List[Type]) -> List[Text]
     """Gets forward declarations of related types, if present."""
-    forward_decls = dict()
+    forward_decls = {}
     result = []
     done = set()
     for tu in self.translation_units:
-      forward_decls.update(tu.forward_decls)
+      forward_decls |= tu.forward_decls
 
       for t in types:
         if t in forward_decls and t not in done:
-          result.append(_stringify_tokens(forward_decls[t].get_tokens()) + ';')
+          result.append(f'{_stringify_tokens(forward_decls[t].get_tokens())};')
           done.add(t)
 
     return result
@@ -843,39 +840,32 @@ class Generator(object):
     Returns:
       filled function template
     """
-    result = []
-    result.append('  // {}'.format(f.original_definition))
-
+    result = [f'  // {f.original_definition}']
     arguments = ', '.join(str(a) for a in f.arguments())
-    result.append('  {} {}({}) {{'.format(f.result, f.name, arguments))
-    result.append('    {} ret;'.format(f.result.mapped_type))
-
-    argument_types = []
-    for a in f.argument_types:
-      if not a.is_ptr():
-        argument_types.append(a.wrapped + ';')
-    if argument_types:
-      for arg in argument_types:
-        result.append('    {}'.format(arg))
-
+    result.extend((
+        f'  {f.result} {f.name}({arguments}) {{',
+        f'    {f.result.mapped_type} ret;',
+    ))
+    if argument_types := [
+        f'{a.wrapped};' for a in f.argument_types if not a.is_ptr()
+    ]:
+      result.extend(f'    {arg}' for arg in argument_types)
     call_arguments = f.call_arguments()
     if call_arguments:  # fake empty space to add ',' before first argument
       call_arguments.insert(0, '')
     result.append('')
     # For OSS, the macro below will be replaced.
-    result.append('    SAPI_RETURN_IF_ERROR(sandbox_->Call("{}", &ret{}));'
-                  ''.format(f.name, ', '.join(call_arguments)))
+    result.append(
+        f"""    SAPI_RETURN_IF_ERROR(sandbox_->Call("{f.name}", &ret{', '.join(call_arguments)}));"""
+    )
 
     return_status = 'return absl::OkStatus();'
     if f.result and not f.result.is_void():
       if f.result and f.result.is_enum():
-        return_status = ('return static_cast<{}>'
-                         '(ret.GetValue());').format(f.result.type)
+        return_status = f'return static_cast<{f.result.type}>(ret.GetValue());'
       else:
         return_status = 'return ret.GetValue();'
-    result.append('    {}'.format(return_status))
-    result.append('  }')
-
+    result.extend((f'    {return_status}', '  }'))
     return '\n'.join(result)
 
   def format_template(self, name, functions, related_types, namespaces,
@@ -903,57 +893,46 @@ class Generator(object):
     if header_guard:
       result.append(Generator.GUARD_START.format(header_guard))
 
-    # Copybara transform results in the paths below.
-    result.append('#include "absl/status/status.h"')
-    result.append('#include "absl/status/statusor.h"')
-    result.append('#include "sandboxed_api/sandbox.h"')
-    result.append('#include "sandboxed_api/util/status_macros.h"')
-    result.append('#include "sandboxed_api/vars.h"')
-
+    result.extend((
+        '#include "absl/status/status.h"',
+        '#include "absl/status/statusor.h"',
+        '#include "sandboxed_api/sandbox.h"',
+        '#include "sandboxed_api/util/status_macros.h"',
+        '#include "sandboxed_api/vars.h"',
+    ))
     if embed_name:
       embed_dir = embed_dir or ''
       result.append(
           Generator.EMBED_INCLUDE.format(
-              os.path.join(embed_dir, embed_name) + '_embed.h'))
+              f'{os.path.join(embed_dir, embed_name)}_embed.h'))
 
     if namespaces:
       result.append('')
-      for n in namespaces:
-        result.append('namespace {} {{'.format(n))
-
+      result.extend(f'namespace {n} {{' for n in namespaces)
     if related_types:
       result.append('')
-      for t in related_types:
-        result.append(t)
-
+      result.extend(iter(related_types))
     result.append('')
 
     if embed_name:
       result.append(
           Generator.EMBED_CLASS.format(name, embed_name.replace('-', '_')))
 
-    result.append('class {}Api {{'.format(name))
-    result.append(' public:')
-    result.append('  explicit {}Api(::sapi::Sandbox* sandbox)'
-                  ' : sandbox_(sandbox) {{}}'.format(name))
-    result.append('  // Deprecated')
-    result.append('  ::sapi::Sandbox* GetSandbox() const { return sandbox(); }')
-    result.append('  ::sapi::Sandbox* sandbox() const { return sandbox_; }')
-
+    result.extend((f'class {name}Api {{', ' public:'))
+    result.extend((
+        '  explicit {}Api(::sapi::Sandbox* sandbox)'
+        ' : sandbox_(sandbox) {{}}'.format(name),
+        '  // Deprecated',
+        '  ::sapi::Sandbox* GetSandbox() const { return sandbox(); }',
+        '  ::sapi::Sandbox* sandbox() const { return sandbox_; }',
+    ))
     for f in functions:
       result.append('')
       result.append(self._format_function(f))
 
-    result.append('')
-    result.append(' private:')
-    result.append('  ::sapi::Sandbox* sandbox_;')
-    result.append('};')
-    result.append('')
-
+    result.extend(('', ' private:', '  ::sapi::Sandbox* sandbox_;', '};', ''))
     if namespaces:
-      for n in reversed(namespaces):
-        result.append('}}  // namespace {}'.format(n))
-
+      result.extend(f'}}  // namespace {n}' for n in reversed(namespaces))
     if header_guard:
       result.append(Generator.GUARD_END.format(header_guard))
 

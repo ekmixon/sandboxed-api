@@ -37,7 +37,7 @@ def get_var_type(string: str) -> str:
   var = string.strip()
 
   # Unnamed variable
-  if var in ("void", "...") or var[-1] == "*":
+  if var in {"void", "..."} or var[-1] == "*":
     return var
 
   return " ".join(var.split(" ")[:-1]).strip()
@@ -56,14 +56,11 @@ def get_var_name(string: str) -> str:
   var = string.strip()
 
   # Not an actual variable
-  if var in ("void", "..."):
+  if var in {"void", "..."}:
     return ""
 
   # Unnamed variable, use an arbitrary name
-  if var[-1] == "*":
-    return var.split("_")[1]
-
-  return var.split(" ")[-1].strip()
+  return var.split("_")[1] if var[-1] == "*" else var.split(" ")[-1].strip()
 
 
 def fix_method_type(string: str) -> str:
@@ -79,14 +76,8 @@ def fix_method_type(string: str) -> str:
 
   method_type = string.strip()
 
-  # Const pointer
-  if "*" in method_type and "const" in method_type:
-    return "const void*"
-
-  # Regular pointer
   if "*" in method_type:
-    return "void*"
-
+    return "const void*" if "const" in method_type else "void*"
   # Not a pointer
   return method_type
 
@@ -112,11 +103,11 @@ def fix_argument(string: str) -> str:
   # Pointer (in LibUV, types endind in "_cb" or "_func" are pointers)
   if "*" in arg_type or "_cb" in arg_type or "_func" in arg_type:
     if "const" in arg_type:
-      return "const void* " + arg_name
-    return "void* " + arg_name
+      return f"const void* {arg_name}"
+    return f"void* {arg_name}"
 
   # Not a pointer
-  return arg_type + " " + arg_name
+  return f"{arg_type} {arg_name}"
 
 
 def fix_call_argument(string: str) -> str:
@@ -140,7 +131,7 @@ def fix_call_argument(string: str) -> str:
 
   # Pointer (in LibUV, types endind in "_cb" or "_func" are pointers)
   if "*" in arg_type or "_cb" in arg_type or "_func" in arg_type:
-    return "reinterpret_cast<" + arg_type + ">(" + arg_name + ")"
+    return f"reinterpret_cast<{arg_type}>({arg_name})"
 
   # Not a pointer
   return arg_name
@@ -215,14 +206,13 @@ def append_method(method_type: str, name: str, arguments_list: List[str],
     source: A list that receives the declarations of the method wrappers
   """
 
-  header.append(
-      fix_method_type(method_type) + " sapi_" + name + "(" +
-      ", ".join(map(fix_argument, arguments_list)) + ");")
+  header.append(((f"{fix_method_type(method_type)} sapi_{name}(" + ", ".join(
+      map(fix_argument, arguments_list))) + ");"))
   source.append(
-      fix_method_type(method_type) + " sapi_" + name + "(" +
-      ", ".join(map(fix_argument, arguments_list)) + ") {\n" + "  return " +
-      name + "(" + ", ".join(map(fix_call_argument, arguments_list)) + ");\n" +
-      "}")
+      (((((((f"{fix_method_type(method_type)} sapi_{name}(" + ", ".join(
+          map(fix_argument, arguments_list))) + ") {\n") + "  return ") + name)
+         + "(") + ", ".join(map(fix_call_argument, arguments_list)) + ");\n") +
+       "}"))
 
 
 def append_text(text: str, file: List[str]) -> None:
